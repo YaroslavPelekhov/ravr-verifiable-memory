@@ -1,4 +1,4 @@
-# Verifiable Evidence Memory v1
+# Verifiable Evidence Memory v1.0.1
 
 A deterministic, evidence-only long-term memory service for auditable agent
 evaluation. It implements the Agent Memory Leaderboard Cycle 2 Textual Memory
@@ -32,6 +32,9 @@ FastAPI/Uvicorn and Python's SQLite library.
 - `POST /search`: returns `{"data": [...]}` in relevance order and never exceeds
   `top_k` (1–100).
 - Authentication: `X-Api-Key`, `Authorization: Bearer`, or `Authorization: Token`.
+
+Add and Search fail closed when `RAVR_MEMORY_API_KEY` is unset. Health discloses only
+service status and version, never stored-content counts.
 
 Only the Textual Memory contract is claimed. Multimodal content arrays are rejected
 rather than silently converted.
@@ -87,7 +90,7 @@ the organizers request it.
 ## Version disclosure
 
 - System: Verifiable Evidence Memory
-- Version: 1.0.0
+- Version: 1.0.1
 - Track: Textual Memory
 - Division: Open-source Methods
 - Embedding components: none
@@ -98,3 +101,7 @@ the organizers request it.
 The academic model restrictions are therefore not invoked: there is no embedding or
 LLM component to substitute. The platform's fixed Answer/Eval stage remains outside
 this service.
+
+## License
+
+Apache License 2.0. See `LICENSE`.

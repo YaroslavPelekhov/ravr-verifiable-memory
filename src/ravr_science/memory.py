@@ -122,9 +122,13 @@ def _digest(value: Any, *, length: int | None = None) -> str:
 
 
 def tokenize(text: str, *, remove_stopwords: bool = False) -> tuple[str, ...]:
-    tokens = tuple(match.group(0).casefold().replace("’", "'") for match in _TOKEN_RE.finditer(text))
+    tokens = tuple(
+        match.group(0).casefold().replace("’", "'") for match in _TOKEN_RE.finditer(text)
+    )
     if remove_stopwords:
-        return tuple(token for token in tokens if token not in _QUESTION_STOPWORDS and len(token) > 1)
+        return tuple(
+            token for token in tokens if token not in _QUESTION_STOPWORDS and len(token) > 1
+        )
     return tokens
 
 
@@ -137,6 +141,8 @@ def _timestamp_value(value: Any) -> int | None:
         output = int(value)
     except (TypeError, ValueError) as error:
         raise ValueError("timestamp must be an integer number of Unix milliseconds") from error
+    if not -62_135_596_800_000 <= output <= 253_402_300_799_999:
+        raise ValueError("timestamp is outside the supported datetime range")
     return output
 
 
@@ -164,7 +170,7 @@ class MemoryRecord:
 class VerifiableMemoryStore:
     """SQLite-backed Add/Search store with strict user isolation and audit receipts."""
 
-    version = "ravr-verifiable-memory-v1"
+    version = "ravr-verifiable-memory-v1.0.1"
 
     def __init__(self, path: str | Path) -> None:
         self.path = Path(path).expanduser().resolve()
@@ -232,7 +238,9 @@ class VerifiableMemoryStore:
 
     @staticmethod
     def _validate_identity(value: Any, field: str) -> str:
-        output = str(value or "").strip()
+        if not isinstance(value, str):
+            raise TypeError(f"{field} must be a string")
+        output = value.strip()
         if not output:
             raise ValueError(f"{field} must be a non-empty string")
         if len(output) > 512:
@@ -244,13 +252,19 @@ class VerifiableMemoryStore:
         if not isinstance(messages, list) or not messages:
             raise ValueError("messages must be a non-empty array")
         normalized: list[dict[str, Any]] = []
+        if len(messages) > 100:
+            raise ValueError("messages must contain at most 100 items")
         for item in messages:
             if not isinstance(item, dict):
                 raise TypeError("every message must be an object")
             role = str(item.get("role") or "").strip()
             content = item.get("content")
-            if not role or not isinstance(content, str) or not content.strip():
+            if role not in {"user", "assistant"}:
+                raise ValueError("every message role must be user or assistant")
+            if not isinstance(content, str) or not content.strip():
                 raise ValueError("every message requires non-empty role and string content")
+            if len(content) > 250_000:
+                raise ValueError("message content is too long")
             normalized.append(
                 {
                     "role": role[:64],
@@ -452,16 +466,21 @@ class VerifiableMemoryStore:
     ) -> dict[str, Any]:
         if not isinstance(query, str) or not query.strip():
             raise ValueError("query must be a non-empty string for the textual track")
+        if len(query) > 250_000:
+            raise ValueError("query is too long")
         user = self._validate_identity(user_id, "user_id")
-        try:
-            requested_top_k = int(top_k)
-        except (TypeError, ValueError) as error:
-            raise ValueError("top_k must be an integer") from error
+        if isinstance(top_k, bool) or not isinstance(top_k, int):
+            raise TypeError("top_k must be an integer")
+        requested_top_k = top_k
         if not 1 <= requested_top_k <= 100:
             raise ValueError("top_k must be between 1 and 100")
         if options is None:
             normalized_options: list[str] = []
         elif isinstance(options, list) and all(isinstance(item, str) for item in options):
+            if len(options) > 100:
+                raise ValueError("options must contain at most 100 items")
+            if any(len(item) > 250_000 for item in options):
+                raise ValueError("an option is too long")
             normalized_options = [item.strip() for item in options if item.strip()]
         else:
             raise ValueError("options must be an array of strings when provided")
@@ -485,10 +504,7 @@ class VerifiableMemoryStore:
             document_frequency = self._document_frequency(rows)
             document_count = len(rows)
             ordered_times = sorted(
-                {
-                    int(row["timestamp_ms"] or row["inserted_at_ms"])
-                    for row in rows
-                }
+                {int(row["timestamp_ms"] or row["inserted_at_ms"]) for row in rows}
             )
             time_rank = {value: rank for rank, value in enumerate(ordered_times)}
             time_denominator = max(1, len(ordered_times) - 1)
@@ -515,7 +531,9 @@ class VerifiableMemoryStore:
                 )
                 value = int(row["timestamp_ms"] or row["inserted_at_ms"])
                 recency = time_rank[value] / time_denominator
-                temporal = recency if temporal_latest else (1.0 - recency if temporal_earliest else 0.0)
+                temporal = (
+                    recency if temporal_latest else (1.0 - recency if temporal_earliest else 0.0)
+                )
                 polarity_match = 1.0 if query_negative == (record.polarity < 0) else 0.0
                 score = (
                     0.68 * lexical
@@ -536,9 +554,9 @@ class VerifiableMemoryStore:
                     "score": round(score, 8),
                     **(
                         {
-                            "created_at": datetime.fromtimestamp(
-                                record.timestamp_ms / 1000, tz=UTC
-                            ).isoformat().replace("+00:00", "Z")
+                            "created_at": datetime.fromtimestamp(record.timestamp_ms / 1000, tz=UTC)
+                            .isoformat()
+                            .replace("+00:00", "Z")
                         }
                         if record.timestamp_ms is not None
                         else {}

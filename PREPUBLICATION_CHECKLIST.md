@@ -1,10 +1,10 @@
 # Pre-publication checklist
 
-This directory is a release candidate, not yet an authorized public repository.
+This directory is approved for publication as a standalone repository.
 
-- Confirm that public release does not conflict with double-blind submissions.
-- Confirm the repository name and author identity to display.
-- Choose and add an explicit software license.
+- Public release authorized by the owner on 2026-10-25.
+- Repository name: `ravr-verifiable-memory`; author: Yaroslav Pelekhov.
+- Apache-2.0 license added.
 - Create a new random `RAVR_MEMORY_API_KEY`; never reuse an LLM provider key.
 - Deploy with a persistent `/data` volume and HTTPS.
 - Run the local HTTP contract tests and a hosted load smoke.

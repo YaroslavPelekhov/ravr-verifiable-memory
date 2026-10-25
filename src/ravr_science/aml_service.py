@@ -23,7 +23,7 @@ def store() -> VerifiableMemoryStore:
 def _authorized(authorization: str | None, x_api_key: str | None) -> bool:
     expected = os.getenv("RAVR_MEMORY_API_KEY", "")
     if not expected:
-        return True
+        return False
     bearer = ""
     if authorization:
         scheme, _, value = authorization.partition(" ")
@@ -55,7 +55,7 @@ def create_app():
 
     @app.get("/health")
     def health() -> dict[str, Any]:
-        return {"status": "ok", **store().stats()}
+        return {"status": "ok", "version": VerifiableMemoryStore.version}
 
     @app.post("/add")
     def add(payload: dict[str, Any], _: None = Depends(require_key)) -> dict[str, Any]:

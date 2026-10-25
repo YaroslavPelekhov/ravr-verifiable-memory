@@ -95,11 +95,34 @@ class VerifiableMemoryStoreTests(unittest.TestCase):
             top_k=2,
         )
         self.assertTrue(any("archaeology" in item["content"].casefold() for item in result["data"]))
-        self.assertTrue(all("final answer" not in item["content"].casefold() for item in result["data"]))
+        self.assertTrue(
+            all("final answer" not in item["content"].casefold() for item in result["data"])
+        )
 
     def test_invalid_top_k_is_rejected(self) -> None:
         with self.assertRaisesRegex(ValueError, "between 1 and 100"):
             self.store.search(query="anything", user_id="u", top_k=101)
+        with self.assertRaisesRegex(TypeError, "must be an integer"):
+            self.store.search(query="anything", user_id="u", top_k=1.5)
+
+    def test_identity_fields_require_strings(self) -> None:
+        with self.assertRaisesRegex(TypeError, "request_id must be a string"):
+            self.store.add(
+                request_id=123,
+                messages=[{"role": "user", "content": "text"}],
+                user_id="u",
+                session_id="s",
+            )
+
+    def test_invalid_role_and_oversized_batches_are_rejected(self) -> None:
+        common = {"request_id": "r", "user_id": "u", "session_id": "s"}
+        with self.assertRaisesRegex(ValueError, "role must be user or assistant"):
+            self.store.add(messages=[{"role": "system", "content": "hidden"}], **common)
+        with self.assertRaisesRegex(ValueError, "at most 100"):
+            self.store.add(
+                messages=[{"role": "user", "content": str(index)} for index in range(101)],
+                **common,
+            )
 
 
 if __name__ == "__main__":
