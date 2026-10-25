@@ -124,6 +124,29 @@ class VerifiableMemoryStoreTests(unittest.TestCase):
                 **common,
             )
 
+    def test_context_window_crosses_add_chunk_boundary_within_session(self) -> None:
+        store = VerifiableMemoryStore(
+            Path(self.directory.name) / "window.sqlite3", context_window_radius=1
+        )
+        store.add(
+            request_id="chunk-1",
+            messages=[
+                {"role": "user", "content": "Unrelated introduction."},
+                {"role": "user", "content": "Project Orion reached the bridge."},
+            ],
+            user_id="u",
+            session_id="shared-session",
+        )
+        store.add(
+            request_id="chunk-2",
+            messages=[{"role": "assistant", "content": "The next detail is sapphire."}],
+            user_id="u",
+            session_id="shared-session",
+        )
+        result = store.search(query="Where did Project Orion reach?", user_id="u", top_k=1)
+        self.assertIn("Project Orion reached the bridge", result["data"][0]["content"])
+        self.assertIn("The next detail is sapphire", result["data"][0]["content"])
+
 
 if __name__ == "__main__":
     unittest.main()

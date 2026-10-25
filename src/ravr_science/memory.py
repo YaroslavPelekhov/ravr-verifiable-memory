@@ -121,9 +121,20 @@ def _digest(value: Any, *, length: int | None = None) -> str:
     return output if length is None else output[:length]
 
 
-def tokenize(text: str, *, remove_stopwords: bool = False) -> tuple[str, ...]:
-    tokens = tuple(
+def tokenize(
+    text: str,
+    *,
+    remove_stopwords: bool = False,
+    normalize_english_possessives: bool = False,
+) -> tuple[str, ...]:
+    raw_tokens = tuple(
         match.group(0).casefold().replace("’", "'") for match in _TOKEN_RE.finditer(text)
+    )
+    tokens = tuple(
+        token[:-2]
+        if normalize_english_possessives and token.endswith("'s") and len(token) > 2
+        else token
+        for token in raw_tokens
     )
     if remove_stopwords:
         return tuple(
@@ -148,6 +159,7 @@ def _timestamp_value(value: Any) -> int | None:
 
 @dataclass(frozen=True)
 class MemoryRecord:
+    row_id: int
     memory_id: str
     user_id: str
     session_id: str
@@ -167,13 +179,46 @@ class MemoryRecord:
         return f"[{'; '.join(labels)}]\n{self.content}"
 
 
+@dataclass(frozen=True)
+class RankingWeights:
+    """Transparent coefficients for an offline, frozen ranking ablation."""
+
+    lexical: float = 0.68
+    bm25: float = 0.0
+    phrase: float = 0.12
+    option: float = 0.12
+    temporal: float = 0.07
+    polarity: float = 0.01
+    recency_tiebreak: float = 0.000001
+
+
 class VerifiableMemoryStore:
     """SQLite-backed Add/Search store with strict user isolation and audit receipts."""
 
-    version = "ravr-verifiable-memory-v1.0.1"
+    version = "ravr-verifiable-memory-v1.0.2"
 
-    def __init__(self, path: str | Path) -> None:
+    def __init__(
+        self,
+        path: str | Path,
+        *,
+        ranking_weights: RankingWeights | None = None,
+        normalize_english_possessives: bool = False,
+        query_conditioned_temporal: bool = False,
+        context_window_radius: int = 0,
+        deduplicate_context_windows: bool = False,
+        context_window_top_n: int | None = None,
+    ) -> None:
         self.path = Path(path).expanduser().resolve()
+        self.ranking_weights = ranking_weights or RankingWeights()
+        self.normalize_english_possessives = normalize_english_possessives
+        self.query_conditioned_temporal = query_conditioned_temporal
+        if not 0 <= context_window_radius <= 5:
+            raise ValueError("context_window_radius must be between 0 and 5")
+        self.context_window_radius = context_window_radius
+        self.deduplicate_context_windows = deduplicate_context_windows
+        if context_window_top_n is not None and not 1 <= context_window_top_n <= 100:
+            raise ValueError("context_window_top_n must be between 1 and 100")
+        self.context_window_top_n = context_window_top_n
         self.path.parent.mkdir(parents=True, exist_ok=True)
         self._lock = threading.RLock()
         self._initialize()
@@ -318,7 +363,10 @@ class VerifiableMemoryStore:
                 (request, user, session, payload_hash, inserted_at_ms),
             )
             for ordinal, message in enumerate(normalized):
-                tokens = tokenize(message["content"])
+                tokens = tokenize(
+                    message["content"],
+                    normalize_english_possessives=self.normalize_english_possessives,
+                )
                 polarity = -1 if any(token in _NEGATIONS for token in tokens) else 1
                 memory_id = "mem_" + _digest(
                     {
@@ -372,6 +420,7 @@ class VerifiableMemoryStore:
     @staticmethod
     def _record(row: sqlite3.Row) -> MemoryRecord:
         return MemoryRecord(
+            row_id=int(row["row_id"]),
             memory_id=str(row["memory_id"]),
             user_id=str(row["user_id"]),
             session_id=str(row["session_id"]),
@@ -456,6 +505,36 @@ class VerifiableMemoryStore:
         document_bigrams = set(itertools.pairwise(document_tokens))
         return len(query_bigrams & document_bigrams) / len(query_bigrams)
 
+    @staticmethod
+    def _bm25_score(
+        query_tokens: Sequence[str],
+        document_tokens: Sequence[str],
+        document_frequency: Counter[str],
+        document_count: int,
+        average_document_length: float,
+    ) -> float:
+        if not query_tokens or not document_tokens:
+            return 0.0
+        counts = Counter(document_tokens)
+        k1 = 1.2
+        b = 0.75
+        length_ratio = len(document_tokens) / max(1.0, average_document_length)
+        score = 0.0
+        for token in dict.fromkeys(query_tokens):
+            frequency = counts[token]
+            if not frequency:
+                continue
+            inverse_document_frequency = math.log(
+                1.0
+                + (document_count - document_frequency[token] + 0.5)
+                / (document_frequency[token] + 0.5)
+            )
+            saturation = frequency * (k1 + 1.0) / (
+                frequency + k1 * (1.0 - b + b * length_ratio)
+            )
+            score += inverse_document_frequency * saturation
+        return score
+
     def search(
         self,
         *,
@@ -486,10 +565,24 @@ class VerifiableMemoryStore:
             raise ValueError("options must be an array of strings when provided")
 
         query_text = query.strip()
-        query_tokens = tokenize(query_text, remove_stopwords=True)
+        query_tokens = tokenize(
+            query_text,
+            remove_stopwords=True,
+            normalize_english_possessives=self.normalize_english_possessives,
+        )
         if not query_tokens:
-            query_tokens = tokenize(query_text)
-        option_tokens = [tokenize(option, remove_stopwords=True) for option in normalized_options]
+            query_tokens = tokenize(
+                query_text,
+                normalize_english_possessives=self.normalize_english_possessives,
+            )
+        option_tokens = [
+            tokenize(
+                option,
+                remove_stopwords=True,
+                normalize_english_possessives=self.normalize_english_possessives,
+            )
+            for option in normalized_options
+        ]
         groups: list[Sequence[str]] = [query_tokens, *option_tokens]
 
         with self._lock, self._connect() as connection:
@@ -503,22 +596,50 @@ class VerifiableMemoryStore:
                 return {"data": []}
             document_frequency = self._document_frequency(rows)
             document_count = len(rows)
-            ordered_times = sorted(
-                {int(row["timestamp_ms"] or row["inserted_at_ms"]) for row in rows}
-            )
-            time_rank = {value: rank for rank, value in enumerate(ordered_times)}
-            time_denominator = max(1, len(ordered_times) - 1)
+            document_tokens_by_row = {
+                int(row["row_id"]): tuple(json.loads(str(row["token_json"]))) for row in rows
+            }
+            if self.ranking_weights.bm25:
+                average_document_length = sum(
+                    len(tokens) for tokens in document_tokens_by_row.values()
+                ) / max(1, document_count)
+                raw_bm25 = {
+                    row_id: self._bm25_score(
+                        query_tokens,
+                        tokens,
+                        document_frequency,
+                        document_count,
+                        average_document_length,
+                    )
+                    for row_id, tokens in document_tokens_by_row.items()
+                }
+                maximum_bm25 = max(raw_bm25.values(), default=0.0) or 1.0
+            else:
+                raw_bm25 = {row_id: 0.0 for row_id in document_tokens_by_row}
+                maximum_bm25 = 1.0
             temporal_latest = bool(set(query_tokens) & _TEMPORAL_LATEST)
             temporal_earliest = bool(set(query_tokens) & _TEMPORAL_EARLIEST)
-            query_negative = bool(set(tokenize(query_text)) & _NEGATIONS)
+            query_negative = bool(
+                set(
+                    tokenize(
+                        query_text,
+                        normalize_english_possessives=self.normalize_english_possessives,
+                    )
+                )
+                & _NEGATIONS
+            )
 
-            scored: list[tuple[float, int, MemoryRecord]] = []
+            features: list[
+                tuple[MemoryRecord, float, float, float, float, float, int]
+            ] = []
             for row in rows:
                 record = self._record(row)
-                document_tokens = tuple(json.loads(str(row["token_json"])))
+                row_id = int(row["row_id"])
+                document_tokens = document_tokens_by_row[row_id]
                 lexical = self._overlap_score(
                     query_tokens, document_tokens, document_frequency, document_count
                 )
+                bm25 = raw_bm25[row_id] / maximum_bm25
                 phrase = self._bigram_score(query_tokens, document_tokens)
                 option = max(
                     (
@@ -529,41 +650,140 @@ class VerifiableMemoryStore:
                     ),
                     default=0.0,
                 )
-                value = int(row["timestamp_ms"] or row["inserted_at_ms"])
-                recency = time_rank[value] / time_denominator
-                temporal = (
-                    recency if temporal_latest else (1.0 - recency if temporal_earliest else 0.0)
+                value = int(
+                    row["timestamp_ms"]
+                    if row["timestamp_ms"] is not None
+                    else row["inserted_at_ms"]
                 )
                 polarity_match = 1.0 if query_negative == (record.polarity < 0) else 0.0
+                features.append((record, lexical, bm25, phrase, option, polarity_match, value))
+
+            global_times = sorted({item[-1] for item in features})
+            global_rank = {value: rank for rank, value in enumerate(global_times)}
+            global_denominator = max(1, len(global_times) - 1)
+            temporal_intent = temporal_latest or temporal_earliest
+            if self.query_conditioned_temporal and temporal_intent:
+                topical_times = sorted(
+                    {
+                        value
+                        for _, lexical, bm25, phrase, _, _, value in features
+                        if lexical > 0 or bm25 > 0 or phrase > 0
+                    }
+                )
+                if not topical_times:
+                    topical_times = global_times
+            else:
+                topical_times = global_times
+            topical_rank = {value: rank for rank, value in enumerate(topical_times)}
+            topical_denominator = max(1, len(topical_times) - 1)
+
+            scored: list[tuple[float, int, MemoryRecord]] = []
+            for record, lexical, bm25, phrase, option, polarity_match, value in features:
+                recency = global_rank[value] / global_denominator
+                topical_recency = (
+                    topical_rank[value] / topical_denominator if value in topical_rank else 0.0
+                )
+                temporal = (
+                    topical_recency
+                    if temporal_latest
+                    else (1.0 - topical_recency if temporal_earliest else 0.0)
+                )
+                weights = self.ranking_weights
                 score = (
-                    0.68 * lexical
-                    + 0.12 * phrase
-                    + 0.12 * option
-                    + 0.07 * temporal
-                    + 0.01 * polarity_match
-                    + 0.000001 * recency
+                    weights.lexical * lexical
+                    + weights.bm25 * bm25
+                    + weights.phrase * phrase
+                    + weights.option * option
+                    + weights.temporal * temporal
+                    + weights.polarity * polarity_match
+                    + weights.recency_tiebreak * recency
                 )
                 scored.append((score, value, record))
 
             scored.sort(key=lambda item: (item[0], item[1], item[2].memory_id), reverse=True)
-            selected = scored[:requested_top_k]
-            result = [
-                {
-                    "id": record.memory_id,
-                    "content": record.evidence_text,
-                    "score": round(score, 8),
-                    **(
+            context_sessions: dict[str, list[MemoryRecord]] = {}
+            context_positions: dict[int, int] = {}
+            if self.context_window_radius:
+                selected_sessions = tuple(
+                    dict.fromkeys(record.session_id for _, _, record in scored)
+                )
+                placeholders = ",".join("?" for _ in selected_sessions)
+                for row in connection.execute(
+                    f"""
+                    SELECT * FROM memory
+                    WHERE user_id = ? AND session_id IN ({placeholders})
+                    ORDER BY session_id, row_id
+                    """,
+                    (user, *selected_sessions),
+                ):
+                    record = self._record(row)
+                    context_sessions.setdefault(record.session_id, []).append(record)
+                for records in context_sessions.values():
+                    for position, record in enumerate(records):
+                        context_positions[record.row_id] = position
+
+            def context_neighbors(center: MemoryRecord) -> list[MemoryRecord]:
+                records = context_sessions[center.session_id]
+                position = context_positions[center.row_id]
+                start = max(0, position - self.context_window_radius)
+                stop = min(len(records), position + self.context_window_radius + 1)
+                return records[start:stop]
+
+            if self.context_window_radius and self.deduplicate_context_windows:
+                selected = []
+                covered_memory_ids: set[str] = set()
+                for item in scored:
+                    center = item[2]
+                    if center.memory_id in covered_memory_ids:
+                        continue
+                    selected.append(item)
+                    for neighbor in context_neighbors(center):
+                        covered_memory_ids.add(neighbor.memory_id)
+                    if len(selected) == requested_top_k:
+                        break
+            else:
+                selected = scored[:requested_top_k]
+
+            result = []
+            for result_rank, (score, _, record) in enumerate(selected, start=1):
+                expand_context = self.context_window_radius and (
+                    self.context_window_top_n is None
+                    or result_rank <= self.context_window_top_n
+                )
+                if expand_context:
+                    neighbors = context_neighbors(record)
+                    result_id = "ctx_" + _digest(
                         {
-                            "created_at": datetime.fromtimestamp(record.timestamp_ms / 1000, tz=UTC)
-                            .isoformat()
-                            .replace("+00:00", "Z")
-                        }
-                        if record.timestamp_ms is not None
-                        else {}
-                    ),
-                }
-                for score, _, record in selected
-            ]
+                            "center": record.memory_id,
+                            "members": [neighbor.memory_id for neighbor in neighbors],
+                        },
+                        length=24,
+                    )
+                    content = "\n\n".join(
+                        f"[memory_id={neighbor.memory_id}]\n{neighbor.evidence_text}"
+                        for neighbor in neighbors
+                    )
+                else:
+                    result_id = record.memory_id
+                    content = record.evidence_text
+                result.append(
+                    {
+                        "id": result_id,
+                        "content": content,
+                        "score": round(score, 8),
+                        **(
+                            {
+                                "created_at": datetime.fromtimestamp(
+                                    record.timestamp_ms / 1000, tz=UTC
+                                )
+                                .isoformat()
+                                .replace("+00:00", "Z")
+                            }
+                            if record.timestamp_ms is not None
+                            else {}
+                        ),
+                    }
+                )
             receipt_payload = {
                 "user_id_hash": _digest(user),
                 "query_hash": _digest({"query": query_text, "options": normalized_options}),

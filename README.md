@@ -1,4 +1,4 @@
-# Verifiable Evidence Memory v1.0.1
+# Verifiable Evidence Memory v1.0.2
 
 A deterministic, evidence-only long-term memory service for auditable agent
 evaluation. It implements the Agent Memory Leaderboard Cycle 2 Textual Memory
@@ -11,7 +11,9 @@ Add persists every source message unchanged under a strict `user_id` isolation
 boundary. Search creates a bounded candidate set using SQLite FTS5 and applies a
 transparent ranking rule over lexical overlap, adjacent query terms, answer-option
 evidence, temporal intent, polarity, and a deterministic recency tie-break. It returns
-ranked source evidence, never a final answer.
+ranked source evidence, never a final answer. Version 1.0.2 expands only the first ten
+ranked candidates with the two adjacent turns on each side. The bounded expansion
+preserves conversational context without increasing the result count.
 
 The service adds four verification properties that are useful beyond raw retrieval:
 
@@ -19,6 +21,8 @@ The service adds four verification properties that are useful beyond raw retriev
 - stable content-bound memory identifiers;
 - strict cross-user isolation in both candidate generation and fallback retrieval;
 - append-only search receipts binding query hashes to ordered result hashes.
+- cross-Add context windows ordered within `session_id`, including when one logical
+  session is split across multiple 20-message requests.
 
 No third-party memory implementation or benchmark answer data is used. The
 implementation is original work by Yaroslav Pelekhov. Runtime dependencies are
@@ -99,7 +103,7 @@ the organizers request it.
 ## Version disclosure
 
 - System: Verifiable Evidence Memory
-- Version: 1.0.1
+- Version: 1.0.2
 - Track: Textual Memory
 - Division: Open-source Methods
 - Embedding components: none

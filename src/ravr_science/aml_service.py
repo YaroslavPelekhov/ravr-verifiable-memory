@@ -17,7 +17,9 @@ def _database_path() -> Path:
 
 @lru_cache(maxsize=1)
 def store() -> VerifiableMemoryStore:
-    return VerifiableMemoryStore(_database_path())
+    return VerifiableMemoryStore(
+        _database_path(), context_window_radius=2, context_window_top_n=10
+    )
 
 
 def _authorized(authorization: str | None, x_api_key: str | None) -> bool:
