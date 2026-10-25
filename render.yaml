@@ -1,0 +1,13 @@
+services:
+  - type: web
+    name: ravr-verifiable-memory
+    runtime: docker
+    plan: free
+    region: frankfurt
+    branch: main
+    healthCheckPath: /health
+    envVars:
+      - key: RAVR_MEMORY_API_KEY
+        sync: false
+      - key: RAVR_MEMORY_DB
+        value: /tmp/ravr-memory.sqlite3

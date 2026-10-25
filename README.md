@@ -80,6 +80,15 @@ The expected Cycle 2 scale is small enough for a single persistent SQLite instan
 Advertise conservative concurrency (`Add=1`, `Search=2`) until a hosted load smoke has
 confirmed higher values.
 
+### Render fallback
+
+`render.yaml` defines a free Docker web service in Frankfurt with `/health` checks and
+prompts for `RAVR_MEMORY_API_KEY` during Blueprint creation. Render's free filesystem is
+ephemeral, so this fallback is suitable only for a continuously active evaluation run:
+an instance restart, redeploy, or idle spin-down deletes the SQLite database. For a
+formal run, warm the service immediately before Add and keep the evaluation continuous.
+Use Railway or another provider with a persistent volume when available.
+
 ## Evaluation-data lifecycle
 
 Evaluation content is used only to service the active Add/Search run. It is not used
