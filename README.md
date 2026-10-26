@@ -93,6 +93,10 @@ an instance restart, redeploy, or idle spin-down deletes the SQLite database. Fo
 formal run, warm the service immediately before Add and keep the evaluation continuous.
 Use Railway or another provider with a persistent volume when available.
 
+The `deploy/context-v1.0.2` branch is an isolated Smoke deployment wrapper for the
+frozen `candidate/context-v1.0.2` implementation. It uses a distinct Render service
+name and database path so the approved v1.0.1 endpoint is never replaced in place.
+
 ## Evaluation-data lifecycle
 
 Evaluation content is used only to service the active Add/Search run. It is not used
