@@ -1,13 +1,19 @@
 services:
   - type: web
-    name: ravr-verifiable-memory
+    name: ravr-verifiable-memory-v11
     runtime: docker
-    plan: free
+    plan: starter
     region: frankfurt
-    branch: main
     healthCheckPath: /health
+    autoDeploy: false
+    disk:
+      name: memory
+      mountPath: /data
+      sizeGB: 1
     envVars:
       - key: RAVR_MEMORY_API_KEY
         sync: false
       - key: RAVR_MEMORY_DB
-        value: /tmp/ravr-memory.sqlite3
+        value: /data/ravr-memory.sqlite3
+      - key: RAVR_MEMORY_PROFILE
+        value: certified

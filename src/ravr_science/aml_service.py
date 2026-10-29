@@ -8,16 +8,34 @@ from functools import lru_cache
 from pathlib import Path
 from typing import Any
 
-from .memory import VerifiableMemoryStore
+from .memory import OperatorConfig, VerifiableMemoryStore
 
 
 def _database_path() -> Path:
     return Path(os.getenv("RAVR_MEMORY_DB", "/data/ravr-memory.sqlite3"))
 
 
+# "certified" holds only operators admitted by the frozen-protocol gate (see AML_FULL_PREP report);
+# "format" adds ISO dates and the small-memory passthrough, which retrieval metrics cannot certify.
+PROFILES: dict[str, OperatorConfig] = {
+    "certified": OperatorConfig(role_user=0.05, scoped_fts=True),
+    "format": OperatorConfig(
+        role_user=0.05, scoped_fts=True, iso_dates=True, passthrough_chars=48_000
+    ),
+}
+
+
 @lru_cache(maxsize=1)
 def store() -> VerifiableMemoryStore:
-    return VerifiableMemoryStore(_database_path())
+    profile = os.getenv("RAVR_MEMORY_PROFILE", "certified")
+    if profile not in PROFILES:
+        raise RuntimeError(f"unknown RAVR_MEMORY_PROFILE {profile!r}")
+    return VerifiableMemoryStore(
+        _database_path(),
+        context_window_radius=2,
+        context_window_top_n=20,
+        operators=PROFILES[profile],
+    )
 
 
 def _authorized(authorization: str | None, x_api_key: str | None) -> bool:

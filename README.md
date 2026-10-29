@@ -1,4 +1,4 @@
-# Verifiable Evidence Memory v1.0.1
+# Verifiable Evidence Memory v1.1.0
 
 A deterministic, evidence-only long-term memory service for auditable agent
 evaluation. It implements the Agent Memory Leaderboard Cycle 2 Textual Memory
@@ -11,7 +11,19 @@ Add persists every source message unchanged under a strict `user_id` isolation
 boundary. Search creates a bounded candidate set using SQLite FTS5 and applies a
 transparent ranking rule over lexical overlap, adjacent query terms, answer-option
 evidence, temporal intent, polarity, and a deterministic recency tie-break. It returns
-ranked source evidence, never a final answer.
+ranked source evidence, never a final answer. Version 1.1.0 expands only the first twenty
+ranked candidates with the two adjacent turns on each side. The bounded expansion
+preserves conversational context without increasing the result count.
+
+Version 1.1.0 adds optional, deterministic retrieval operators (`OperatorConfig` in
+`memory.py`). Every default is off and reproduces v1.0.2 exactly. The default service
+profile (`certified`) enables only operators admitted by a frozen-protocol paired gate on a
+held-out partition: a small user-turn prior, the wider first-twenty context expansion, and a
+per-user FTS scope that keeps Search latency flat as many evaluation users share one database.
+The `format` profile (`RAVR_MEMORY_PROFILE=format`) additionally prints ISO dates beside each
+timestamp and returns an entire small memory in chronological order; retrieval metrics cannot
+certify those two, so they are off by default. Empty source turns are stored as an explicit
+placeholder instead of failing the whole Add request.
 
 The service adds four verification properties that are useful beyond raw retrieval:
 
@@ -19,6 +31,8 @@ The service adds four verification properties that are useful beyond raw retriev
 - stable content-bound memory identifiers;
 - strict cross-user isolation in both candidate generation and fallback retrieval;
 - append-only search receipts binding query hashes to ordered result hashes.
+- cross-Add context windows ordered within `session_id`, including when one logical
+  session is split across multiple 20-message requests.
 
 No third-party memory implementation or benchmark answer data is used. The
 implementation is original work by Yaroslav Pelekhov. Runtime dependencies are
@@ -89,6 +103,10 @@ an instance restart, redeploy, or idle spin-down deletes the SQLite database. Fo
 formal run, warm the service immediately before Add and keep the evaluation continuous.
 Use Railway or another provider with a persistent volume when available.
 
+The `deploy/context-v1.0.2` branch is an isolated Smoke deployment wrapper for the
+frozen `candidate/context-v1.0.2` implementation. It uses a distinct Render service
+name and database path so the approved v1.0.1 endpoint is never replaced in place.
+
 ## Evaluation-data lifecycle
 
 Evaluation content is used only to service the active Add/Search run. It is not used
@@ -99,7 +117,7 @@ the organizers request it.
 ## Version disclosure
 
 - System: Verifiable Evidence Memory
-- Version: 1.0.1
+- Version: 1.1.0
 - Track: Textual Memory
 - Division: Open-source Methods
 - Embedding components: none
