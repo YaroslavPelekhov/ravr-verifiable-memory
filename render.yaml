@@ -1,0 +1,12 @@
+services:
+  - type: web
+    name: ravr-verifiable-memory-v102
+    runtime: docker
+    plan: free
+    region: frankfurt
+    branch: deploy/proxy-v1.1.0
+    healthCheckPath: /health
+    autoDeploy: false
+    envVars:
+      - key: RAVR_UPSTREAM_URL
+        value: https://ravr-memory-full.onrender.com
